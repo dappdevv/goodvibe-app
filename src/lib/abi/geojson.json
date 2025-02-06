@@ -1,0 +1,55 @@
+[
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "_lng",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_lat",
+				"type": "uint256"
+			}
+		],
+		"name": "calcCoordinates",
+		"outputs": [
+			{
+				"internalType": "uint256[2][5]",
+				"name": "",
+				"type": "uint256[2][5]"
+			}
+		],
+		"stateMutability": "pure",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "_amount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_startLng",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "_startLat",
+				"type": "uint256"
+			}
+		],
+		"name": "generateGeoJSON",
+		"outputs": [
+			{
+				"internalType": "uint256[2][5][]",
+				"name": "",
+				"type": "uint256[2][5][]"
+			}
+		],
+		"stateMutability": "pure",
+		"type": "function"
+	}
+]
