@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createPublicClient, createWalletClient, http, defineChain, formatEther } from 'viem';
+	import { formatEther, bytesToHex } from 'viem';
 	import {
 		privateKeyToAccount,
 		generatePrivateKey,
@@ -9,8 +9,7 @@
 	} from 'viem/accounts';
 	import { onMount } from 'svelte';
 	import { encryptData, decryptData } from '$lib/cryptoUtils';
-	import { publicClient, GoodVibeChain } from '$lib/chain/config';
-	import { walletStore, walletAddress } from '$lib/stores/walletStore';
+	import { walletClient, initWallet, publicClient } from '$lib/stores/walletStore';
 
 	let address = '';
 	let privateKey = '';
@@ -24,9 +23,10 @@
 	let decryptPassword = '';
 	let decryptError = '';
 	let activeWalletIndex: number | null = null;
-	let walletClient: ReturnType<typeof createWalletClient> | null = null;
 	let connectedWalletAddress = '';
 	let connectedWalletBalance = '0';
+	let showPrivateKey = false;
+	let connectedPrivateKey = '';
 
 	async function updateBlockNumber() {
 		try {
@@ -38,12 +38,6 @@
 
 	function generateWallet() {
 		try {
-			// Генерация через приватный ключ
-			privateKey = generatePrivateKey();
-			const account = privateKeyToAccount(privateKey);
-			address = account.address;
-
-			// Генерация мнемоники
 			mnemonic = generateMnemonic(english);
 			const mnemonicAccount = mnemonicToAccount(mnemonic);
 			address = mnemonicAccount.address;
@@ -51,19 +45,18 @@
 			error = '';
 		} catch (err) {
 			error = 'Ошибка генерации кошелька';
-			privateKey = '';
 			mnemonic = '';
 		}
 	}
 
 	async function encryptAndStoreWallet() {
 		try {
-			if (!privateKey || !encryptPassword) {
+			if (!mnemonic || !encryptPassword) {
 				encryptError = 'Сначала сгенерируйте кошелек и введите пароль';
 				return;
 			}
 
-			const encryptedWallet = encryptData(privateKey, encryptPassword);
+			const encryptedWallet = await encryptData(mnemonic, encryptPassword);
 			const storedWalletsJson = localStorage.getItem('encryptedWallets') || '[]';
 			const currentStoredWallets = JSON.parse(storedWalletsJson);
 
@@ -89,23 +82,15 @@
 			}
 
 			const encryptedWallet = storedWallets[index];
-			const decryptedPrivateKey = decryptData(encryptedWallet, decryptPassword);
+			const decryptedMnemonic = await decryptData(encryptedWallet, decryptPassword);
 
-			walletClient = createWalletClient({
-				account: privateKeyToAccount(decryptedPrivateKey),
-				chain: GoodVibeChain,
-				transport: http(import.meta.env.VITE_GOODVIBE_CHAIN_RPC, {
-					fetchOptions: {
-						headers: {
-							Authorization: import.meta.env.VITE_GOODVIBE_CHAIN_RPC_AUTHORIZATION
-						}
-					}
-				})
-			});
+			const client = await initWallet(decryptedMnemonic);
 
-			// Обновление хранилищ
-			walletStore.set(walletClient);
-			walletAddress.set(walletClient.account.address);
+			// Получаем приватный ключ напрямую из мнемоники
+			const hdKey = mnemonicToAccount(decryptedMnemonic).getHdKey();
+			if (hdKey.privateKey) {
+				connectedPrivateKey = bytesToHex(hdKey.privateKey);
+			}
 
 			// Обновление UI
 			activeWalletIndex = index;
@@ -113,9 +98,11 @@
 			decryptError = '';
 
 			// Получение баланса
-			const newBalance = await publicClient.getBalance({ address: walletClient.account.address });
+			const newBalance = await publicClient.getBalance({
+				address: client.account.address as `0x${string}`
+			});
 			connectedWalletBalance = formatEther(newBalance);
-			connectedWalletAddress = walletClient.account.address;
+			connectedWalletAddress = client.account.address;
 		} catch (err) {
 			decryptError = 'Неверный пароль или поврежденный кошелек';
 			console.error(err);
@@ -124,8 +111,30 @@
 
 	async function updateConnectedWalletBalance() {
 		if (connectedWalletAddress) {
-			const newBalance = await publicClient.getBalance({ address: connectedWalletAddress });
+			const newBalance = await publicClient.getBalance({
+				address: connectedWalletAddress as `0x${string}`
+			});
 			connectedWalletBalance = formatEther(newBalance);
+		}
+	}
+
+	function deleteStoredWallet(index: number) {
+		const updatedWallets = [...storedWallets];
+		updatedWallets.splice(index, 1);
+		localStorage.setItem('encryptedWallets', JSON.stringify(updatedWallets));
+		storedWallets = updatedWallets;
+
+		// Сброс активного кошелька, если удаляем подключенный
+		if (activeWalletIndex === index) {
+			activeWalletIndex = null;
+			connectedWalletAddress = '';
+			connectedWalletBalance = '0';
+			connectedPrivateKey = '';
+			showPrivateKey = false;
+		}
+		// Корректировка индекса активного кошелька после удаления
+		else if (activeWalletIndex !== null && index < activeWalletIndex) {
+			activeWalletIndex--;
 		}
 	}
 
@@ -154,7 +163,7 @@
 		Generate Wallet
 	</button>
 
-	{#if privateKey}
+	{#if mnemonic}
 		<div class="space-y-4">
 			<div class="rounded bg-gray-100 p-4">
 				<h2 class="font-semibold">Block Number</h2>
@@ -216,6 +225,20 @@
 							<span class="text-sm font-medium text-green-700">Balance:</span>
 							<p class="font-mono text-sm">{connectedWalletBalance} GVT</p>
 						</div>
+						<div>
+							<button
+								on:click={() => (showPrivateKey = !showPrivateKey)}
+								class="rounded bg-yellow-500 px-3 py-1 text-sm text-white hover:bg-yellow-600"
+							>
+								{showPrivateKey ? 'Hide Private Key' : 'Show Private Key'}
+							</button>
+							{#if showPrivateKey}
+								<div class="mt-2">
+									<span class="text-sm font-medium text-green-700">Private Key:</span>
+									<p class="break-all font-mono text-sm">{connectedPrivateKey}</p>
+								</div>
+							{/if}
+						</div>
 					</div>
 				</div>
 			{/if}
@@ -225,10 +248,16 @@
 					<div class="rounded bg-gray-100 p-4">
 						<div class="flex items-center justify-between">
 							<p class="font-mono">Encrypted Wallet #{index + 1}</p>
-							{#if activeWalletIndex === index}
-								<span class="text-sm text-green-600">Connected</span>
-							{:else}
-								<div class="flex items-center space-x-2">
+							<div class="flex items-center space-x-2">
+								{#if activeWalletIndex === index}
+									<span class="text-sm text-green-600">Connected</span>
+									<button
+										on:click={() => deleteStoredWallet(index)}
+										class="ml-2 rounded bg-red-500 px-3 py-1 text-sm text-white hover:bg-red-600"
+									>
+										Удалить
+									</button>
+								{:else}
 									<input
 										type="password"
 										placeholder="Enter password"
@@ -241,8 +270,14 @@
 									>
 										Connect
 									</button>
-								</div>
-							{/if}
+									<button
+										on:click={() => deleteStoredWallet(index)}
+										class="rounded bg-red-500 px-3 py-1 text-sm text-white hover:bg-red-600"
+									>
+										Удалить
+									</button>
+								{/if}
+							</div>
 						</div>
 						{#if decryptError && activeWalletIndex === null}
 							<p class="mt-1 text-sm text-red-600">{decryptError}</p>

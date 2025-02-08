@@ -1,10 +1,9 @@
 <script lang="ts">
-	import { walletStore } from '$lib/stores/walletStore';
-	import { publicClient } from '$lib/stores/walletStore';
+	import { initWallet, walletClient, publicClient } from '$lib/stores/walletStore';
 	import daoUsersABI from '$lib/abi/daoUsers.json';
-	import type { WalletClient, Account } from 'viem';
 	import { page } from '$app/state';
 	import Wallet from '$lib/components/Wallet.svelte';
+	import { getContract } from 'viem';
 
 	let name = '';
 	let referrer = page.url.searchParams.get('ref') || '0x0000000000000000000000000000000000000000';
@@ -14,29 +13,21 @@
 
 	const daoUsersAddress = import.meta.env.VITE_DAO_USERS_ADDRESS;
 
-	// BigInt JSON serialization fix
-	const replacer = (_key: string, value: unknown) =>
-		typeof value === 'bigint' ? value.toString() : value;
+	const contractDAOUsers = getContract({
+		address: daoUsersAddress,
+		abi: daoUsersABI,
+		client: {
+			public: publicClient,
+			wallet: $walletClient
+		}
+	});
 
 	async function handleRegistration() {
-		if (!walletStore?.client?.account) {
-			error = 'Пожалуйста, подключите кошелёк';
-			return;
-		}
-
 		try {
 			loading = true;
 			error = '';
 
-			const { request } = await publicClient.simulateContract({
-				address: daoUsersAddress,
-				abi: daoUsersABI,
-				functionName: 'registerUser',
-				args: [referrer, name],
-				account: walletStore.client.account
-			});
-
-			const hash = await walletStore.client.writeContract(request);
+			const hash = await contractDAOUsers.write.registerUser([referrer, name]);
 			const receipt = await publicClient.waitForTransactionReceipt({ hash });
 
 			if (receipt.status === 'success') {
@@ -45,14 +36,13 @@
 				error = 'Ошибка транзакции';
 			}
 		} catch (err) {
-			error = err instanceof Error ? err.message : JSON.stringify(err, replacer);
+			error = err instanceof Error ? err.message : JSON.stringify(err);
 		} finally {
 			loading = false;
 		}
 	}
 </script>
 
-// src/routes/reg/+page.svelte
 <div class="container mx-auto max-w-lg p-4">
 	<h1 class="mb-6 text-2xl font-bold">Регистрация в DAO</h1>
 
@@ -98,9 +88,9 @@
 
 			<button
 				type="submit"
-				disabled={loading || !walletStore?.client?.account}
+				disabled={loading || !$walletClient?.account}
 				class="focus:shadow-outline w-full rounded bg-blue-500 px-4 py-2 font-bold text-white hover:bg-blue-700 focus:outline-none {loading ||
-				!$walletStore?.client?.account
+				!$walletClient?.account
 					? 'cursor-not-allowed opacity-50'
 					: ''}"
 			>
